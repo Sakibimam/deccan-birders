@@ -11,9 +11,9 @@
   },
   "dependencies": {
     "@snaha/swarm-id": "0.4.1",
+    "js-sha3": "^0.9.3",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1",
-    "@ethersphere/bee-js": "13.1.0"
+    "react-dom": "^18.3.1"
   },
   "devDependencies": {
     "@types/react": "^18.3.12",

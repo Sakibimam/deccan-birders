@@ -4,13 +4,19 @@
   "version": "1.0.0",
   "description": "File a bird sighting in one app, open it in a completely different one. No export step.",
   "type": "module",
-  "engines": { "node": ">=20.12" },
-  "workspaces": ["apps/filer"],
+  "engines": {
+    "node": ">=20.12"
+  },
+  "workspaces": [
+    "apps/filer"
+  ],
   "scripts": {
     "dev": "npm run dev --workspace apps/filer",
     "build": "npm run build --workspace apps/filer",
     "typecheck": "npm run typecheck --workspace apps/filer",
     "reader": "node scripts/serve-reader.mjs",
-    "topic": "node scripts/topic.mjs"
+    "topic": "node scripts/topic.mjs",
+    "hashcheck": "node scripts/hashcheck.mjs",
+    "verify": "node scripts/verify.mjs"
   }
 }

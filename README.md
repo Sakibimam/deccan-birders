@@ -96,6 +96,7 @@ years of records without noticing.
 ## Verify it yourself
 
 ```bash
+npm run hashcheck                        # filer and reader derive the same topic
 node scripts/seed-demo-data.mjs          # needs a local Bee node with a stamp
 node scripts/verify.mjs <owner-address>  # walks the reader's exact path
 ```

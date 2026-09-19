@@ -1,3 +1,4 @@
+import { keccak256 } from 'js-sha3'
 import { SwarmIdClient } from '@snaha/swarm-id'
 import type { ConnectionInfo } from '@snaha/swarm-id'
 import {
@@ -141,7 +142,7 @@ export async function publishSighting(
  * backup, and the records would not really be the user's.
  */
 export async function loadIndexFromSwarm(owner: string): Promise<SightingIndex | null> {
-  const topicHex = await keccakTopic(FEED_TOPIC)
+  const topicHex = keccakTopic(FEED_TOPIC)
   const feedUrl = `${READ_ENDPOINT.replace(/\/$/, '')}/feeds/${owner.replace(/^0x/, '')}/${topicHex}?type=sequence`
 
   const feedResponse = await fetch(feedUrl)
@@ -163,8 +164,15 @@ export async function loadIndexFromSwarm(owner: string): Promise<SightingIndex |
   return null
 }
 
-/** keccak256 of the topic string, matching Bee's feed topic derivation. */
-export async function keccakTopic(topic: string): Promise<string> {
-  const { Topic } = await import('@ethersphere/bee-js')
-  return Topic.fromString(topic).toHex()
+/**
+ * keccak256 of the topic string, matching Bee's feed topic derivation.
+ *
+ * Deliberately NOT done with bee-js. bee-js imports Node's `stream` module,
+ * which Vite shims to an empty browser module — the build warns that `Readable`
+ * is not exported, and any code path that touched it would fail at runtime.
+ * Pulling 475 KB and a broken shim into the browser to hash one string is a bad
+ * trade, so this uses the hash function directly, exactly as the reader does.
+ */
+export function keccakTopic(topic: string): string {
+  return keccak256(topic)
 }

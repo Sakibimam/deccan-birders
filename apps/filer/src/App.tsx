@@ -45,7 +45,7 @@ export default function App() {
         setInfo(c.connectionInfo)
       })
       .catch((e) => setFailure(classifyThrown(e)))
-    keccakTopic(FEED_TOPIC).then(setTopicHex).catch(() => undefined)
+    setTopicHex(keccakTopic(FEED_TOPIC))
   }, [])
 
   const owner = info?.appKey?.address ?? ''
