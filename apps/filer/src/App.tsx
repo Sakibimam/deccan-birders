@@ -35,16 +35,20 @@ export default function App() {
   const [entries, setEntries] = useState<IndexEntry[]>([])
   const [busy, setBusy] = useState(false)
   const [failure, setFailure] = useState<UploadFailure | null>(null)
+  const [startupError, setStartupError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [topicHex, setTopicHex] = useState('')
 
   useEffect(() => {
+    // A startup problem is NOT an upload failure. Conflating them told the user
+    // their sighting could not be saved before they had filed one.
     initSwarmId(setInfo)
       .then((c) => {
         setClient(c)
         setInfo(c.connectionInfo)
+        setStartupError(null)
       })
-      .catch((e) => setFailure(classifyThrown(e)))
+      .catch((e) => setStartupError(e instanceof Error ? e.message : String(e)))
     setTopicHex(keccakTopic(FEED_TOPIC))
   }, [])
 
@@ -137,7 +141,15 @@ export default function App() {
         </p>
       </header>
 
-      {!signedIn && (
+      {startupError && (
+        <section className="card warn">
+          <h2>Could not reach Swarm ID</h2>
+          <p>Sign-in is unavailable, so nothing can be filed yet. Reload the page to try again.</p>
+          <p className="detail">{startupError}</p>
+        </section>
+      )}
+
+      {!signedIn && !startupError && (
         <section className="card">
           <h2>Sign in</h2>
           <p>Your sightings are stored under your own Swarm identity, not in our account.</p>

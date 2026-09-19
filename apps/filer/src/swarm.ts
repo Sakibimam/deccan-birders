@@ -11,17 +11,29 @@ import {
 import { UploadFailure, classifyThrown, describeUnavailable } from './errors'
 import type { IndexEntry, SightingIndex, SightingPhoto, SightingRecord } from './record'
 import { buildIndex } from './record'
+import { feedIdentifier, feedPayload, nextFeedIndex } from './feed-v1'
 
 let client: SwarmIdClient | null = null
+let initialising: Promise<SwarmIdClient> | null = null
 
 export function getClient(): SwarmIdClient {
   if (!client) throw new Error('Swarm ID client not initialised')
   return client
 }
 
-export async function initSwarmId(
-  onChange: (info: ConnectionInfo) => void,
-): Promise<SwarmIdClient> {
+/**
+ * Idempotent. React StrictMode runs effects twice in development, and a second
+ * SwarmIdClient racing the first produced a real, user-visible bug: a fresh page
+ * load showed an error about a sighting that had never been filed. One in-flight
+ * initialisation is shared by every caller.
+ */
+export function initSwarmId(onChange: (info: ConnectionInfo) => void): Promise<SwarmIdClient> {
+  if (initialising) return initialising
+  initialising = createClient(onChange)
+  return initialising
+}
+
+async function createClient(onChange: (info: ConnectionInfo) => void): Promise<SwarmIdClient> {
   client = new SwarmIdClient({
     iframeOrigin: IFRAME_ORIGIN,
     // Without this, every first-time user has canUpload === false.
@@ -32,7 +44,14 @@ export async function initSwarmId(
     },
     onConnectionChange: onChange,
   })
-  await client.initialize()
+  try {
+    await client.initialize()
+  } catch (error) {
+    // Let the next mount retry rather than wedging the app permanently.
+    initialising = null
+    client = null
+    throw error
+  }
   return client
 }
 
@@ -120,8 +139,14 @@ export async function publishSighting(
   const indexReference = await uploadBytes(c, encoder.encode(JSON.stringify(index)))
 
   try {
-    const writer = c.makeSequentialFeedWriter({ topic: FEED_TOPIC })
-    await writer.uploadReference(indexReference)
+    const topicHex = keccakTopic(FEED_TOPIC)
+    const index = await nextFeedIndex(READ_ENDPOINT, record.observer.swarmAddress, topicHex)
+    const soc = c.makeSOCWriter()
+    await soc.rawUpload(
+      feedIdentifier(topicHex, index),
+      feedPayload(indexReference),
+      GATEWAY_SAFE_UPLOAD,
+    )
   } catch (error) {
     throw new UploadFailure(
       'feed-write-failed',

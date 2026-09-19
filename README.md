@@ -110,12 +110,60 @@ PASS  feed resolves (HTTP 200)
 PASS  feed returned the index document directly
 PASS  index declares format "deccan-birders.index"
 PASS  index declares version 1
-PASS  index lists 2 sighting(s)
-PASS  "Painted Stork" 2026-09-18 @ 17.3316,78.4682 — spec-conformant
-PASS  "Indian Pitta" 2026-09-17 @ 17.5449,78.3389 — spec-conformant
+PASS  index lists 1 sighting(s)
+PASS  "Indian Roller" 2026-09-19 @ 17.39,78.31 — spec-conformant
 PASS  /bzz correctly refuses a raw bytes reference (HTTP 404)
-8 passed, 0 failed
+7 passed, 0 failed
 ```
+
+### The acceptance criterion, actually performed
+
+Driven end to end in a real browser, not asserted:
+
+1. Signed in through the real Swarm ID popup, creating a fresh account that
+   owns no postage batch — the case every first-time user hits.
+2. `canUpload` became true via the subsidised gateway; the filing form is not
+   even offered before that.
+3. Filed "Indian Roller ×3" at Osman Sagar, Hyderabad.
+4. Opened `apps/reader/index.html` — a different application — pointed it at
+   the **public gateway** and the owner address, and the sighting rendered:
+   species, binomial, numeric coordinates, observer. **Nobody exported
+   anything.**
+
+```
+PASS  signed in; filing form is offered
+PASS  canUpload is true — subsidised gateway covers a user with no stamp
+PASS  upload reported success
+PASS  the new sighting appears in the list
+PASS  1 sighting card(s) rendered
+PASS  numeric coordinates rendered (not "near the usual spot")
+PASS  no records skipped
+```
+
+### Why the feed is written by hand
+
+`SwarmIdClient.makeSequentialFeedWriter()` produces a **v2** feed. Bee reports
+it as `Swarm-Feed-Resolved-Version: v2`, returns a nonsensical `Content-Length`,
+its `ETag` is not a fetchable reference — and the **public gateway returns HTTP
+500 for it outright**. A reader on the gateway could never resolve it, which
+would defeat the entire problem.
+
+So `apps/filer/src/feed-v1.ts` writes the update as a single-owner chunk in the
+layout Bee's own `/feeds` endpoint serves:
+
+```
+identifier = keccak256( topic[32] ‖ index[8, big-endian] )
+payload    = timestamp[8, big-endian seconds] ‖ reference[32]
+```
+
+signed by the user's Swarm ID app key. Those resolve on a local node *and* the
+public gateway — verified end to end below.
+
+The next index is read from the network via the `Swarm-Feed-Index-Next` header,
+which Bee lists in `Access-Control-Expose-Headers` so it is readable
+cross-origin. It is never counted locally: a counter in `localStorage`
+desynchronises the moment the user opens the app on a second device, and this
+app's whole claim is that the records are not tied to a device.
 
 > One thing worth knowing, found by testing rather than reading: Bee's
 > `/feeds/{owner}/{topic}` endpoint **dereferences the feed and returns the
