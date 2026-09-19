@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Sighting Reader — an independent client</title>
+<!--
+  ════════════════════════════════════════════════════════════════════════════
+  THIS FILE IS THE POINT OF THE WHOLE PROJECT.
+
+  It is a second, separate application. It is not a route, a tab, or a mode of
+  the filing app. It shares no build, no framework, no package.json and no
+  module with it. Open it directly in a browser — there is nothing to install.
+
+  It imports exactly ZERO code from the filing app. Everything it knows about
+  the stored records it learned from SPEC.md, the published format description.
+  It was written the way a fourth app's author would have to write it: with the
+  data and the spec, and nothing else.
+
+  Its only external dependency is keccak256, to turn the documented topic
+  string into the 32-byte topic the feed is keyed by. That is a hash function,
+  not a shared record parser.
+
+  ENDPOINT RULE (from SPEC.md §1): every object here was uploaded as raw bytes,
+  so every object here is read back from /bytes. Fetching a raw reference
+  through /bzz returns a redirect and then a 404.
+  ════════════════════════════════════════════════════════════════════════════
+-->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/js-sha3/0.9.3/sha3.min.js"></script>
+<style>
+  :root{--bg:#f7f6f2;--panel:#fff;--ink:#1f2420;--muted:#6a7269;--line:#dfe2db;
+        --accent:#3f6b47;--bad:#8f2f24;color-scheme:light}
+  @media (prefers-color-scheme:dark){
+    :root{--bg:#141714;--panel:#1c211d;--ink:#e9eee8;--muted:#9aa398;--line:#333a34;
+          --accent:#8fc39b;--bad:#e08a7e;color-scheme:dark}}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:16px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif;padding:0 16px 64px}
+  .wrap{max-width:680px;margin:0 auto}
+  header{padding:28px 0 12px}
+  h1{margin:0 0 4px;font-size:1.6rem;letter-spacing:-.02em}
+  .sub{margin:0;color:var(--muted);font-size:.93rem}
+  form{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+    padding:16px;margin:18px 0;display:flex;flex-direction:column;gap:10px}
+  label{display:flex;flex-direction:column;gap:4px;font-size:.8rem;color:var(--muted)}
+  input{padding:9px;border:1px solid var(--line);border-radius:8px;background:var(--bg);
+    color:var(--ink);font:inherit;font-size:.9rem;font-family:ui-monospace,Menlo,monospace}
+  button{padding:10px 18px;border:0;border-radius:8px;background:var(--accent);
+    color:#fff;font:inherit;cursor:pointer}
+  button:disabled{opacity:.5}
+  .status{color:var(--muted);font-size:.9rem;margin:14px 0}
+  .status.bad{color:var(--bad)}
+  .rec{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+    padding:16px;margin:12px 0}
+  .rec h2{margin:0 0 2px;font-size:1.1rem}
+  .rec .sci{margin:0 0 10px;color:var(--muted);font-style:italic;font-size:.88rem}
+  dl{margin:0;display:grid;grid-template-columns:auto 1fr;gap:4px 14px;font-size:.88rem}
+  dt{color:var(--muted)}
+  dd{margin:0}
+  .photos{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+  .photos img{max-width:160px;border-radius:8px;border:1px solid var(--line)}
+  .skipped{border-left:4px solid var(--bad)}
+  .mono{font-family:ui-monospace,Menlo,monospace;font-size:.78rem;word-break:break-all}
+  a{color:var(--accent)}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <h1>Sighting Reader</h1>
+  <p class="sub">
+    A different application from the one that filed these records. It shares no code with it.
+    Give it a birder's public owner address and it reads their sightings straight off Swarm.
+  </p>
+</header>
+
+<form id="f">
+  <label>Owner address
+    <input id="owner" placeholder="a1b2c3… (20-byte hex, no 0x)" required>
+  </label>
+  <label>Topic
+    <input id="topic" value="deccan-birders-sightings-v1" required>
+  </label>
+  <label>Swarm endpoint
+    <input id="bee" value="https://api.gateway.ethswarm.org" required>
+  </label>
+  <button id="go" type="submit">Read sightings</button>
+</form>
+
+<p class="status" id="status">Enter an owner address to begin.</p>
+<div id="out"></div>
+</div>
+
+<script>
+/* Format constants, transcribed from SPEC.md. Not imported from anywhere. */
+const SIGHTING_FORMAT = "deccan-birders.sighting";
+const INDEX_FORMAT    = "deccan-birders.index";
+const SUPPORTED_VERSION = 1;
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) =>
+  ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+
+/* SPEC.md §1: the topic is keccak256 of the documented topic string. */
+function topicHex(topic) {
+  if (/^[0-9a-f]{64}$/i.test(topic)) return topic.toLowerCase();
+  if (typeof keccak256 !== "function")
+    throw new Error("keccak256 did not load — paste the 64-character topic hex from SPEC.md instead");
+  return keccak256(topic);
+}
+
+const base = () => $("bee").value.trim().replace(/\/$/, "");
+
+/* Raw bytes were written to /bytes, so they are read back from /bytes. */
+async function readBytes(reference) {
+  const res = await fetch(`${base()}/bytes/${reference}`);
+  if (!res.ok) throw new Error(`/bytes/${reference.slice(0,10)}… returned HTTP ${res.status}`);
+  return res;
+}
+
+async function readJson(reference) {
+  const res = await readBytes(reference);
+  const text = await res.text();
+  try { return JSON.parse(text) }
+  catch { throw new Error(`object ${reference.slice(0,10)}… is not JSON`) }
+}
+
+/**
+ * Resolve the owner's feed to their index document.
+ *
+ * Bee's /feeds endpoint DEREFERENCES the feed and returns the stored content
+ * itself, with the content's reference in the ETag header — it does not return
+ * a {"reference": "..."} envelope, which is what most examples online imply.
+ * Some deployments do return that envelope, so both shapes are handled.
+ */
+async function resolveIndex(owner, topic) {
+  const url = `${base()}/feeds/${owner.replace(/^0x/, "")}/${topicHex(topic)}?type=sequence`;
+  const res = await fetch(url);
+  if (res.status === 404) throw new Error("This owner has filed no sightings yet, or the topic is wrong.");
+  if (!res.ok) throw new Error(`feed lookup returned HTTP ${res.status}`);
+
+  const text = await res.text();
+  let body;
+  try { body = JSON.parse(text) }
+  catch { throw new Error("the feed resolved to something that is not JSON") }
+
+  // Shape A: the index document itself.
+  if (body && body.format === INDEX_FORMAT) return body;
+  // Shape B: an envelope pointing at it — raw bytes, so read from /bytes.
+  if (body && typeof body.reference === "string") return await readJson(body.reference);
+  throw new Error(`the feed resolved to an unrecognised object (format "${body && body.format}")`);
+}
+
+/* SPEC.md §5: check format and version; ignore unknown fields; say what was skipped. */
+function checkRecord(rec) {
+  if (!rec || typeof rec !== "object") return "not an object";
+  if (rec.format !== SIGHTING_FORMAT) return `format is "${rec.format ?? "missing"}", expected "${SIGHTING_FORMAT}"`;
+  if (rec.formatVersion !== SUPPORTED_VERSION) return `formatVersion ${rec.formatVersion} is newer than this reader understands (${SUPPORTED_VERSION})`;
+  for (const f of ["id","observed","species","count","location","observer"]) {
+    if (rec[f] === undefined) return `required field "${f}" is missing`;
+  }
+  if (typeof rec.location.latitude !== "number" || typeof rec.location.longitude !== "number")
+    return "location is not numeric";
+  return null;
+}
+
+function render(rec) {
+  const el = document.createElement("article");
+  el.className = "rec";
+  const when = rec.observed.time
+    ? `${rec.observed.date} at ${rec.observed.time} (${rec.observed.timeZone})`
+    : `${rec.observed.date} (${rec.observed.timeZone})`;
+  el.innerHTML = `
+    <h2>${esc(rec.species.commonName)}${rec.count > 1 ? ` &times;${rec.count}` : ""}</h2>
+    ${rec.species.scientificName ? `<p class="sci">${esc(rec.species.scientificName)}</p>` : ""}
+    <dl>
+      <dt>Seen</dt><dd>${esc(when)}</dd>
+      <dt>Where</dt><dd>${rec.location.placeName ? esc(rec.location.placeName) + "<br>" : ""}
+        <span class="mono">${rec.location.latitude}, ${rec.location.longitude}
+        (${esc(rec.location.coordinateSystem)}${rec.location.accuracyMetres ? `, ±${rec.location.accuracyMetres} m` : ""})</span></dd>
+      <dt>By</dt><dd>${esc(rec.observer.name)}</dd>
+      ${rec.notes ? `<dt>Notes</dt><dd>${esc(rec.notes)}</dd>` : ""}
+    </dl>`;
+  if (Array.isArray(rec.photos) && rec.photos.length) {
+    const box = document.createElement("div");
+    box.className = "photos";
+    for (const p of rec.photos) {
+      const img = document.createElement("img");
+      /* Photos are raw bytes too — same endpoint family. */
+      img.src = `${base()}/bytes/${p.swarmReference}`;
+      img.alt = rec.species.commonName;
+      box.appendChild(img);
+    }
+    el.appendChild(box);
+  }
+  return el;
+}
+
+function renderSkipped(ref, why) {
+  const el = document.createElement("article");
+  el.className = "rec skipped";
+  el.innerHTML = `<h2>Record skipped</h2><p class="sub">${esc(why)}</p>
+    <p class="mono">${esc(ref)}</p>`;
+  return el;
+}
+
+$("f").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  $("go").disabled = true;
+  $("out").innerHTML = "";
+  $("status").className = "status";
+  $("status").textContent = "Resolving feed…";
+  try {
+    const index = await resolveIndex($("owner").value.trim(), $("topic").value.trim());
+
+    if (index.format !== INDEX_FORMAT)
+      throw new Error(`index format is "${index.format ?? "missing"}", expected "${INDEX_FORMAT}"`);
+    if (index.formatVersion !== SUPPORTED_VERSION)
+      throw new Error(`index formatVersion ${index.formatVersion} is newer than this reader understands`);
+
+    const list = Array.isArray(index.sightings) ? index.sightings : [];
+    $("status").textContent = `${list.length} sighting${list.length === 1 ? "" : "s"} · last updated ${String(index.updatedAt || "").slice(0,10)}`;
+
+    for (const entry of list) {
+      try {
+        const rec = await readJson(entry.reference);
+        const problem = checkRecord(rec);
+        $("out").appendChild(problem ? renderSkipped(entry.reference, problem) : render(rec));
+      } catch (err) {
+        $("out").appendChild(renderSkipped(entry.reference, err.message));
+      }
+    }
+  } catch (err) {
+    $("status").className = "status bad";
+    $("status").textContent = err.message;
+  } finally {
+    $("go").disabled = false;
+  }
+});
+</script>
+</body>
+</html>

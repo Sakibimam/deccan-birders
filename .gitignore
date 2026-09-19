@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.env
+.env.local
+*.key
+*.mnemonic
+giftcode*
+.DS_Store
+*.log
+
+# seed tool key — dev only, never committed
+.seed-key

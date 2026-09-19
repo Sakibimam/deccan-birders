@@ -1,0 +1,140 @@
+# Deccan Birders
+
+> Meera's one requirement: whatever writes the records must not be the only
+> thing that can read them.
+
+Two applications that share no code. One files bird sightings to Swarm under the
+birder's own identity. The other reads them back knowing nothing but the
+published format. Nobody exports anything.
+
+```
+apps/filer     React + Swarm ID. Files a sighting.
+apps/reader    One HTML file. Zero imports. Reads sightings.
+SPEC.md        The format. The contract between them.
+```
+
+## Try it
+
+```bash
+npm install
+npm run dev        # the filing app  -> http://localhost:5173
+npm run reader     # the reader      -> http://localhost:4173
+```
+
+The reader asks for an owner address and a topic. Both are shown in the filing
+app under **Open these in another app**. Paste them in and the sightings appear
+in software that has never seen the filing app's code.
+
+## Why there are two apps
+
+The group has lost its records three times. A forum that closed. A Facebook
+group that ate the photos. A birding app that shut down and exported the
+location column as `"near the usual spot"`.
+
+Every one of those was software that was the only thing able to read its own
+data. So the deliverable here is not an app with an export button — it is a
+**format**, documented in [SPEC.md](./SPEC.md), with two independent
+implementations to prove the format is real.
+
+`apps/reader/index.html` imports nothing. No React, no bundler, no shared
+module, no `package.json`. Its only dependency is a keccak256 implementation
+from a CDN, used to turn the documented topic string into a feed topic — a hash
+function, not a record parser. It was written the way a fourth app's author
+would have to write it: with the stored data and the spec, and nothing else.
+
+## How a record is found
+
+```
+feed(owner, topic)  ──▶  index.json  ──▶  sighting.json  ──▶  photo bytes
+```
+
+The birder's Swarm ID gives them an **app key address**. That address plus the
+documented topic `deccan-birders-sightings-v1` is the whole address of their
+records. It is public, it never changes, and it is all a reader needs.
+
+**The list you see on screen is loaded from Swarm, not from the browser.** There
+is no local database and no cache in the read path. If there were, the records
+would live on the device and Swarm would just be a backup — which is the thing
+this project exists not to be.
+
+## Uploading for a user who owns nothing
+
+A fresh Swarm ID account has no postage batch, so a first-time user cannot
+upload at all. The client is constructed with a `subsidisedGatewayUrl` so their
+uploads are stamped for them:
+
+```ts
+new SwarmIdClient({
+  iframeOrigin: 'https://swarm-id.snaha.net',
+  subsidisedGatewayUrl: 'https://api.gateway.ethswarm.org/',
+  metadata: { name: 'Deccan Birders', /* … */ },
+})
+```
+
+Every write path is gated on `connectionInfo.canUpload` before it is attempted
+(`requireUploadCapability` in `apps/filer/src/swarm.ts`), the submit button is
+disabled while capability is missing, and the reason is shown on screen.
+
+### Failures say which failure
+
+`no-stamp`, `stamp-expired`, `stamper-failed`, a gateway that refused the
+request, a timeout, a photo over the size limit, an invalid record, a feed write
+that failed after the record was safely stored — each renders as its own
+sentence with its own suggested action and its own reason code. None of them
+collapse into "something went wrong", because that is how a group loses three
+years of records without noticing.
+
+### Two gateway details that cost people an afternoon
+
+- **`pin` and `tag` are never passed.** The public gateway's CORS allow-list
+  refuses `Swarm-Pin` and `Swarm-Tag`, and a refused header appears in the
+  browser only as a bare `Failed to fetch` with nothing in the console.
+- **Raw bytes go to `/bytes` and come back from `/bytes`.** Fetching a raw
+  reference through `/bzz` gives a redirect and then a 404. The acceptance test
+  below asserts this rather than trusting it.
+
+## Verify it yourself
+
+```bash
+node scripts/seed-demo-data.mjs          # needs a local Bee node with a stamp
+node scripts/verify.mjs <owner-address>  # walks the reader's exact path
+```
+
+`verify.mjs` resolves the feed, reads the index, fetches every sighting, checks
+each one against the spec's required fields, and asserts that `/bzz` refuses a
+raw reference. Last run:
+
+```
+PASS  feed resolves (HTTP 200)
+PASS  feed returned the index document directly
+PASS  index declares format "deccan-birders.index"
+PASS  index declares version 1
+PASS  index lists 2 sighting(s)
+PASS  "Painted Stork" 2026-09-18 @ 17.3316,78.4682 — spec-conformant
+PASS  "Indian Pitta" 2026-09-17 @ 17.5449,78.3389 — spec-conformant
+PASS  /bzz correctly refuses a raw bytes reference (HTTP 404)
+8 passed, 0 failed
+```
+
+> One thing worth knowing, found by testing rather than reading: Bee's
+> `/feeds/{owner}/{topic}` endpoint **dereferences the feed and returns the
+> stored document itself**, with its reference in the `ETag` header. It does not
+> return a `{"reference": "..."}` envelope, which is what most examples imply.
+> Both apps handle either shape.
+
+## Secrets
+
+No private key, mnemonic, gift code or authenticated URL appears in any tracked
+file. The gateway and iframe origins are public endpoints. The seed tool's key
+lives in `.seed-key`, which is gitignored, and it is a developer convenience —
+the app itself holds no keys, because the user's identity is their own.
+
+## Versions
+
+`@ethersphere/bee-js` is pinned to **13.1.0** and `@snaha/swarm-id` to **0.4.1**.
+bee-js v13 moved every flat method into a namespace (`bee.uploadData` became
+`bee.data.upload`), and most examples online are still v12.
+
+## Licence
+
+MIT.
